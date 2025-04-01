@@ -1,0 +1,10 @@
+[project]
+name = "notebook-feedback-bot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "nbformat>=5.10.4",
+    "streamlit>=1.44.0",
+]
