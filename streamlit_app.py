@@ -13,6 +13,7 @@ from openai.types.chat import (
     ChatCompletionSystemMessageParam
 )
 import subprocess
+import tomli_w
 
 #st.set_page_config(layout="wide")
 
@@ -114,17 +115,23 @@ def unified_diff(notebook: str, starter: str, n_context_lines: int = 3) -> str:
 
 
 @st.cache_resource
-def get_starter_and_diff(notebook_quarto) -> tuple[str, str]:
+def get_starter_and_diff(notebook_quarto, n_context_lines: int) -> tuple[str, str]:
     # Find a starter notebook that most closely matches the uploaded notebook
+    starter_notebooks = all_starters()
     diffs = [
         (starter, unified_diff(notebook_quarto, starter_quarto, n_context_lines=2))
-        for starter, starter_quarto in all_starters().items()
+        for starter, starter_quarto in starter_notebooks.items()
     ]
 
     # Sort by size of the diff
     diffs.sort(key=lambda x: len(x[1]))
     closest_starter, closest_starter_diff = diffs[0]
-    return closest_starter, closest_starter_diff
+
+    # Redo the diff with the desired number of context lines.
+    starter_quarto = starter_notebooks[closest_starter]
+    new_diff = unified_diff(notebook_quarto, starter_quarto, n_context_lines=n_context_lines)
+
+    return closest_starter, new_diff
 
 def main():
     st.title("Notebook Diff Helper")
@@ -138,17 +145,13 @@ def main():
     notebook = nbformat.read(uploaded_notebook, as_version=4)
     notebook_quarto = notebook_to_quarto(notebook)
 
-    closest_starter, closest_starter_diff = get_starter_and_diff(notebook_quarto)
+    closest_starter, closest_starter_diff = get_starter_and_diff(notebook_quarto, n_context_lines=9999)
 
     with st.expander("Show your notebook", expanded=False):
         st.write(f"Diff between your notebook and the starter notebook, `{closest_starter}`:")
         st.code(closest_starter_diff, language="diff")
 
     starting_prompt = f"""
-<document title="My Notebook">
-{notebook_quarto}
-</document>
-
 <document title="Diff with Starter Notebook">
 {closest_starter_diff}
 </document>
@@ -200,16 +203,17 @@ def main():
             messages.append(TimedMessage("assistant", response))
             st.session_state.messages = messages
 
-    # Make a downloadable version of the conversation
-    # Use the following format:
-    # <message role="user" at="timestamp">
-    # content...
-    # </message>
-    downloadable = ''
-    for message in messages:
-        downloadable += f'<message role="{message.role}" at="{message.timestamp}">\n'
-        downloadable += message.content
-        downloadable += '\n</message>\n'
+    # Make a downloadable version of the conversation in TOML format
+    downloadable = tomli_w.dumps(dict(message=[
+            {
+                "role": message.role,
+                "timestamp": message.timestamp.isoformat(),
+                "content": message.content
+            }
+            for message in messages
+        ]
+    ), multiline_strings=True)
+    
     st.download_button(
         label="Download conversation",
         data=downloadable,
