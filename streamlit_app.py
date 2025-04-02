@@ -2,9 +2,18 @@ import difflib
 import streamlit as st
 import nbformat
 from pathlib import Path
+from openai import OpenAI
 import subprocess
 
-st.set_page_config(layout="wide")
+#st.set_page_config(layout="wide")
+
+
+@st.cache_resource
+def openai_client():
+    """Initialize OpenAI client."""
+    openai_api_key = st.secrets["OPENAI_API_KEY"]
+    openai_client = OpenAI(api_key=openai_api_key)
+    return openai_client
 
 
 DATA_DIR = Path("data")
@@ -36,6 +45,11 @@ def all_starters():
     return all_starters
 
 
+@st.cache_resource
+def system_prompt():
+    return (DATA_DIR / "system_prompt.md").read_text()
+
+
 def notebook_to_quarto(nb):
     """Convert notebook to Quarto markdown format."""
     chunks = []
@@ -58,6 +72,19 @@ def unified_diff(notebook: str, starter: str) -> str:
     )
 
 
+@st.cache_resource
+def get_starter_and_diff(notebook_quarto) -> tuple[str, str]:
+    # Find a starter notebook that most closely matches the uploaded notebook
+    diffs = [
+        (starter, unified_diff(notebook_quarto, starter_quarto))
+        for starter, starter_quarto in all_starters().items()
+    ]
+
+    # Sort by size of the diff
+    diffs.sort(key=lambda x: len(x[1]))
+    closest_starter, closest_starter_diff = diffs[0]
+    return closest_starter, closest_starter_diff
+
 def main():
     st.title("Notebook Diff Helper")
 
@@ -70,17 +97,67 @@ def main():
     notebook = nbformat.read(uploaded_notebook, as_version=4)
     notebook_quarto = notebook_to_quarto(notebook)
 
-    # Find a starter notebook that most closely matches the uploaded notebook
-    diffs = [
-        (starter, unified_diff(notebook_quarto, starter_quarto))
-        for starter, starter_quarto in all_starters().items()
-    ]
+    closest_starter, closest_starter_diff = get_starter_and_diff(notebook_quarto)
 
-    # Sort by size of the diff
-    diffs.sort(key=lambda x: len(x[1]))
-    closest_starter, closest_starter_diff = diffs[0]
+    with st.expander("Show your notebook", expanded=False):
+        st.write(f"Diff between your notebook and the starter notebook, `{closest_starter}`:")
+        st.code(closest_starter_diff, language="diff")
 
-    st.write(f"Diff between your notebook and the starter notebook, `{closest_starter}`:")
-    st.code(closest_starter_diff, language="diff")
+    starting_prompt = f"""
+<document title="My Notebook">
+{notebook_quarto}
+</document>
+
+<document title="Diff with Starter Notebook">
+{closest_starter_diff}
+</document>
+"""
+    with st.expander("Show prompt", expanded=False):
+        st.write("system prompt:")
+        st.code(system_prompt(), language="markdown")
+        st.write("user prompt:")
+        st.code(starting_prompt, language="markdown")
+    
+    # Reset if a new notebook gets uploaded
+    messages = st.session_state.get("messages", [])
+    if 'messages' not in st.session_state or messages[1]['content'] != starting_prompt:
+        st.session_state.messages = messages = [
+            {"role": "system", "content": system_prompt()},
+            {"role": "user", "content": starting_prompt}
+        ]
+
+    if len(messages) > 2 and st.button("Restart conversation"):
+        messages[2:] = []
+
+    for message in messages[2:]:
+        with st.chat_message(message['role']):
+            st.markdown(message['content'])
+
+    client = openai_client()
+    
+
+    if len(messages) == 2:
+        if not st.button("Generate initial feedback"):
+            st.stop()
+    else:
+        prompt = st.chat_input("Type your message here...")
+        if not prompt:
+            st.stop()
+        messages.append({"role": "user", "content": prompt})
+
+
+    with st.chat_message("assistant"):
+        stream = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=1500,
+                stream=True
+            )
+        response = st.write_stream(stream)
+        messages.append({"role": "assistant", "content": response})
+        st.session_state.messages = messages
+        st.rerun() # ask for a prompt again
+
 
 main()
