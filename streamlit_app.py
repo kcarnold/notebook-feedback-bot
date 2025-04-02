@@ -181,7 +181,7 @@ def main():
 
     client = openai_client()
     
-    if prompt := st.chat_input():
+    if prompt := st.chat_input("Type your message here (in your own words, no AI please)"):
         with st.chat_message("user"):
             st.markdown(prompt)
         messages.append(TimedMessage("user", prompt))
