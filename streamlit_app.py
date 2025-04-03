@@ -203,23 +203,33 @@ def main():
             messages.append(TimedMessage("assistant", response))
             st.session_state.messages = messages
 
-    # Make a downloadable version of the conversation in TOML format
-    downloadable = tomli_w.dumps(dict(message=[
-            {
-                "role": message.role,
-                "timestamp": message.timestamp.isoformat(),
-                "content": message.content
-            }
-            for message in messages
-        ]
-    ), multiline_strings=True)
-    
-    st.download_button(
-        label="Download conversation",
-        data=downloadable,
-        file_name="conversation.txt",
-        mime="text/plain"
-    )
+    with st.expander("Ready to wrap up?", expanded=False):
+        st.write("""Please write, very briefly:
+
+1. Your best and worst moments
+2. the chatbot's best and worst moments, and
+3. any takeaways you have.""")
+        reflection = st.text_area("Reflection")
+
+        # Make a downloadable version of the conversation in TOML format
+        downloadable = tomli_w.dumps(dict(message=[
+                {
+                    "role": message.role,
+                    "timestamp": message.timestamp.isoformat(),
+                    "content": message.content
+                }
+                for message in messages
+            ],
+            reflection=reflection,
+            starter=closest_starter,
+        ), multiline_strings=True)
+        
+        st.download_button(
+            label="Download conversation",
+            data=downloadable,
+            file_name="conversation.txt",
+            mime="text/plain"
+        )
 
 
 main()
