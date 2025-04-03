@@ -134,7 +134,7 @@ def get_starter_and_diff(notebook_quarto, n_context_lines: int) -> tuple[str, st
     return closest_starter, new_diff
 
 def main():
-    st.title("Notebook Diff Helper")
+    st.title("Notebook Feedback Assistant")
 
     uploaded_notebook = st.file_uploader("Upload your notebook", type=["ipynb"])
     if uploaded_notebook is None:
