@@ -5,19 +5,16 @@ from typing import List, Literal, TypeAlias
 import streamlit as st
 import nbformat
 from pathlib import Path
-from openai import OpenAI
-from openai.types.chat import (
-    ChatCompletionMessageParam,
-    ChatCompletionUserMessageParam,
-    ChatCompletionAssistantMessageParam,
-    ChatCompletionSystemMessageParam
-)
+from google import genai
+from google.genai import types as genai_types
 import subprocess
 import tomli_w
 
 #st.set_page_config(layout="wide")
 
-ChatRole: TypeAlias = Literal["user", "assistant", "system"]
+GENAI_MODEL = 'gemini-2.0-flash'
+
+ChatRole: TypeAlias = Literal["user", "assistant"]
 
 @dataclass
 class TimedMessage:
@@ -31,26 +28,21 @@ class TimedMessage:
         self.content = content
         self.timestamp = datetime.datetime.now()
 
-    def as_openai_message(self) -> ChatCompletionMessageParam:
-        """Convert to OpenAI message format."""
+    def as_genai_message(self) -> genai_types.Content:
+        """Convert to Gemini GenAI message format."""
         if self.role == "user":
-            return ChatCompletionUserMessageParam(
-                role="user",
-                content=self.content
-            )
+            return genai_types.UserContent(self.content)
         elif self.role == "assistant":
-            return ChatCompletionAssistantMessageParam(role="assistant", content=self.content)
-        elif self.role == "system":
-            return ChatCompletionSystemMessageParam(role="system", content=self.content)
+            return genai_types.ModelContent(self.content)
         else:
             raise ValueError(f"Invalid role: {self.role}")
 
 @st.cache_resource
-def openai_client():
+def genai_client():
     """Initialize OpenAI client."""
-    openai_api_key = st.secrets["OPENAI_API_KEY"]
-    openai_client = OpenAI(api_key=openai_api_key)
-    return openai_client
+    return genai.Client(
+        api_key=st.secrets["GEMINI_API_KEY"],
+    )
 
 
 DATA_DIR = Path("data")
@@ -166,20 +158,20 @@ def main():
     messages: List[TimedMessage] = st.session_state.get("messages", [])
     should_restart = (
         'messages' not in st.session_state
-          or messages[1].content != starting_prompt
+          or messages[0].content != starting_prompt
           or (len(messages) > 2 and st.button("Restart conversation")))
     if should_restart:
+        st.session_state['system_prompt'] = system_prompt()
         st.session_state.messages = messages = [
-            TimedMessage("system", system_prompt()),
             TimedMessage("user", starting_prompt),
             TimedMessage("assistant", get_first_followup_prompt()),
         ]
 
-    for message in messages[2:]:
+    for message in messages[1:]:
         with st.chat_message(message.role):
             st.markdown(message.content)
 
-    client = openai_client()
+    client = genai_client()
     
     if prompt := st.chat_input("Type your message here (in your own words, no AI please)"):
         with st.chat_message("user"):
@@ -188,14 +180,17 @@ def main():
 
 
         with st.chat_message("assistant"):
-            stream = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[message.as_openai_message() for message in messages],
-                    temperature=0.7,
-                    max_tokens=1500,
-                    stream=True
+            stream = client.models.generate_content_stream(
+                    model=GENAI_MODEL,
+                    contents=[message.as_genai_message() for message in messages],
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=st.session_state['system_prompt'] or '',
+                        temperature=0.7,
+                        max_output_tokens=1500,
+                        top_k=40,
+                    )
                 )
-            response = st.write_stream(stream)
+            response = st.write_stream((chunk.text for chunk in stream))
             if not isinstance(response, str):
                 # There's some situations where the response is not a string
                 # Hack: convert the response to a string
