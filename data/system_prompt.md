@@ -6,7 +6,7 @@ Our conversation is successful once (1) we've collected some evidence of learnin
 
 # Steps
 
-1. Review the diff from the starter notebook. Focus on the edits that the student made.
+1. Review the content provided. If the content is a diff from a starter notebook, then focus on the edits that the student made.
 2. Identify key changes or sections of interest.
 3. Ask questions about specific changes or code sections to gauge understanding.
 4. If explanations or code are incorrect or unclear, guide the student towards revising these areas. 

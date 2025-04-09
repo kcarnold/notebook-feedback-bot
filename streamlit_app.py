@@ -37,6 +37,15 @@ class TimedMessage:
         else:
             raise ValueError(f"Invalid role: {self.role}")
 
+
+@dataclass
+class Diff:
+    src_name: str
+    dst_name: str
+    diff: str
+    n_changed_lines: int
+
+
 @st.cache_resource
 def genai_client():
     """Initialize OpenAI client."""
@@ -107,23 +116,29 @@ def unified_diff(notebook: str, starter: str, n_context_lines: int = 3) -> str:
 
 
 @st.cache_resource
-def get_starter_and_diff(notebook_quarto, n_context_lines: int) -> tuple[str, str]:
+def get_starter_and_diff(notebook_quarto, n_context_lines: int) -> Diff:
     # Find a starter notebook that most closely matches the uploaded notebook
     starter_notebooks = all_starters()
     diffs = [
-        (starter, unified_diff(notebook_quarto, starter_quarto, n_context_lines=2))
+        (len(unified_diff(notebook_quarto, starter_quarto, n_context_lines=2).split('\n')), starter)
         for starter, starter_quarto in starter_notebooks.items()
     ]
 
     # Sort by size of the diff
-    diffs.sort(key=lambda x: len(x[1]))
-    closest_starter, closest_starter_diff = diffs[0]
+    diffs.sort()
+    num_diff_lines, closest_starter = diffs[0]
 
     # Redo the diff with the desired number of context lines.
     starter_quarto = starter_notebooks[closest_starter]
     new_diff = unified_diff(notebook_quarto, starter_quarto, n_context_lines=n_context_lines)
 
-    return closest_starter, new_diff
+    return Diff(
+        src_name=closest_starter,
+        dst_name="your_notebook.ipynb",
+        diff=new_diff,
+        n_changed_lines=num_diff_lines,
+    )
+
 
 def main():
     st.title("Notebook Feedback Assistant")
@@ -133,21 +148,34 @@ def main():
         st.stop()
 
     # Read the uploaded notebook
-    uploaded_notebook.seek(0)
     notebook = nbformat.read(uploaded_notebook, as_version=4)
     notebook_quarto = notebook_to_quarto(notebook)
+    num_lines = len(notebook_quarto.split('\n'))
 
-    closest_starter, closest_starter_diff = get_starter_and_diff(notebook_quarto, n_context_lines=9999)
+    diff = get_starter_and_diff(notebook_quarto, n_context_lines=9999)
+    #st.write(f"Debug: {diff.n_changed_lines} lines changed out of {num_lines} lines in the notebook.")
+    is_likely_based_on_starter = diff.n_changed_lines < num_lines * .75
+    is_lab = st.checkbox("Is this a lab notebook? (i.e., based on a starter notebook)?", value=is_likely_based_on_starter)
+    if is_lab:
+        st.write(f"It looks like this notebook was based on {diff.src_name}. If this is not correct, please uncheck the box above.")
 
     with st.expander("Show your notebook", expanded=False):
-        st.write(f"Diff between your notebook and the starter notebook, `{closest_starter}`:")
-        st.code(closest_starter_diff, language="diff")
+        if is_lab:
+            st.write(f"Diff between your notebook and the starter notebook, `{diff.src_name}`:")
+            st.code(diff.diff, language="diff")
 
-    starting_prompt = f"""
+            starting_prompt = f"""
 <document title="Diff with Starter Notebook">
-{closest_starter_diff}
+{diff.diff}
 </document>
 """
+        else:
+            starting_prompt = f"""
+<document title="Your Notebook">
+{notebook_quarto}
+</document>
+"""
+            
     with st.expander("Show prompt (debug only)", expanded=False):
         st.write("system prompt:")
         st.code(system_prompt(), language="markdown")
@@ -216,7 +244,8 @@ def main():
                 for message in messages
             ],
             reflection=reflection,
-            starter=closest_starter,
+            is_lab=is_lab,
+            starter=diff.src_name if is_lab else '',
         ), multiline_strings=True)
         
         st.download_button(
