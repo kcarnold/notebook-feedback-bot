@@ -87,12 +87,31 @@ def all_starters():
 
 @st.cache_resource
 def system_prompt():
-    return (DATA_DIR / "system_prompt.md").read_text()
+    base_system_prompt = (DATA_DIR / "system_prompt.md").read_text()
+
+    # Add a compact version of the course objectives
+    objectives = get_course_objectives()
+    fields = ["id", "pillar", "description"]
+    objectives_str = '\n'.join(
+        f'{objective["id"]}: {objective["description"]}'
+        for objective in objectives
+        if objective['class'] != '375' # Don't include 375 objectives
+    )
+    return base_system_prompt + "\n\nFor reference, the course objectives are:\n\n" + objectives_str
+
+
 
 @st.cache_resource
 def get_first_followup_prompt():
     return (DATA_DIR / "first_followup_prompt.md").read_text()
 
+@st.cache_resource
+def get_course_objectives():
+    """Read course objectives from YAML file."""
+    # Each objective is a dict: {"id", "pillar", "class", "section", "description"}
+    import yaml
+    with open(OBJECTIVES_FILE, 'r') as f:
+        return yaml.safe_load(f)
 
 def notebook_to_quarto(nb):
     """Convert notebook to Quarto markdown format."""
