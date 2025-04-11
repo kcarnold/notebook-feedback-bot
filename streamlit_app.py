@@ -64,14 +64,13 @@ REPO_DIR = DATA_DIR / "cs-375-376-public"
 def get_updated_repo():
     if not REPO_DIR.exists():
         print("Cloning the cs-375-376-public repo...")
-        # clone https://github.com/Calvin-Data-Science/cs375-376-public
         subprocess.run(["git", "clone", "https://github.com/Calvin-Data-Science/cs375-376-public", str(REPO_DIR)], check=True)
     else:
-        # update the repo
         print("Updating the cs-375-376-public repo...")
         subprocess.run(["git", "-C", str(REPO_DIR), "pull"], check=False)
 
 STARTERS_DIR = REPO_DIR / "notebooks"
+OBJECTIVES_FILE = REPO_DIR / "course_objectives.yaml"
 
 @st.cache_resource
 def all_starters():
@@ -320,7 +319,7 @@ def notebook_feedback():
                 # Hack: convert the response to a string
                 response = str(response)
             messages.append(TimedMessage("assistant", response, timestamp=now))
-            st.session_state.messages = messages
+            st.session_state.messages = messages[:]
 
     with st.expander("Ready to wrap up?", expanded=False):
         st.write("""Please write, very briefly:
