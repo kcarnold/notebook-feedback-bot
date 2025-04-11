@@ -1,7 +1,8 @@
+from collections import defaultdict
 from dataclasses import dataclass
 import datetime
 import difflib
-from typing import List, Literal, TypeAlias
+from typing import List, Literal, TypeAlias, Dict, Any
 import streamlit as st
 import nbformat
 from pathlib import Path
@@ -9,6 +10,7 @@ from google import genai
 from google.genai import types as genai_types
 import subprocess
 import tomli_w
+import toml
 
 #st.set_page_config(layout="wide")
 
@@ -23,10 +25,10 @@ class TimedMessage:
     content: str
     timestamp: datetime.datetime
 
-    def __init__(self, role: ChatRole, content: str):
+    def __init__(self, role: ChatRole, content: str, timestamp:datetime.datetime):
         self.role = role
         self.content = content
-        self.timestamp = datetime.datetime.now()
+        self.timestamp = timestamp
 
     def as_genai_message(self) -> genai_types.Content:
         """Convert to Gemini GenAI message format."""
@@ -140,7 +142,80 @@ def get_starter_and_diff(notebook_quarto, n_context_lines: int) -> Diff:
     )
 
 
-def main():
+def parse_conversation_file(file_content) -> Dict[str, Any]:
+    """Parse a downloaded conversation file"""
+    try:
+        data = toml.loads(file_content)
+        # Convert message dicts back to TimedMessage objects
+        if "message" in data:
+            data["messages"] = [
+                TimedMessage(
+                    role=msg["role"],
+                    content=msg["content"],
+                    timestamp=datetime.datetime.fromisoformat(msg["timestamp"])
+                )
+                for msg in data["message"]
+            ]
+        return data
+    except Exception as e:
+        st.error(f"Error parsing conversation file: {e}")
+        return {}
+
+
+def conversation_viewer():
+    st.title("Conversation Viewer")
+    
+    uploaded_file = st.file_uploader("Upload a conversation file", type=["txt"])
+    if uploaded_file is None:
+        st.stop()
+        
+    # Read and parse the conversation file
+    conversation_data = parse_conversation_file(uploaded_file.read().decode())
+    
+    if not conversation_data:
+        st.error("Failed to parse conversation file.")
+        st.stop()
+    
+    # Display conversation metadata
+    st.subheader("Conversation Details")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("**Lab notebook:**", conversation_data.get("is_lab", "Unknown"))
+    with col2:
+        st.write("**Starter notebook:**", conversation_data.get("starter", "N/A"))
+    
+    # Display reflection if available
+    if "reflection" in conversation_data and conversation_data["reflection"]:
+        with st.expander("Student Reflection", expanded=True):
+            st.markdown(conversation_data["reflection"])
+    
+    # Display the conversation
+    st.subheader("Conversation")
+    counts_so_far = defaultdict(int)
+    if "messages" in conversation_data:
+        messages = conversation_data["messages"]
+        for i, message in enumerate(messages):
+            is_first_of_type = counts_so_far[message.role] == 0
+            counts_so_far[message.role] += 1
+            if is_first_of_type and message.role == "user":
+                # This is the initial uploaded notebook/diff - show in collapsed expander
+                with st.expander("Initial Notebook/Diff", expanded=False):
+                    st.markdown(message.content)
+                continue
+            if is_first_of_type and message.role == "system":
+                # This is the system prompt - show in collapsed expander
+                with st.expander("System Prompt", expanded=False):
+                    st.markdown(message.content)
+                continue
+                
+            with st.chat_message(message.role):
+                st.markdown(message.content)
+                st.caption(f"Timestamp: {message.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+    else:
+        st.warning("No conversation messages found in the file.")
+
+
+def notebook_feedback():
     st.title("Notebook Feedback Assistant")
 
     uploaded_notebook = st.file_uploader("Upload your notebook", type=["ipynb"])
@@ -182,6 +257,8 @@ def main():
         st.write("user prompt:")
         st.code(starting_prompt, language="markdown")
     
+    now = datetime.datetime.now()
+
     # Reset if a new notebook gets uploaded
     messages: List[TimedMessage] = st.session_state.get("messages", [])
     should_restart = (
@@ -191,8 +268,8 @@ def main():
     if should_restart:
         st.session_state['system_prompt'] = system_prompt()
         st.session_state.messages = messages = [
-            TimedMessage("user", starting_prompt),
-            TimedMessage("assistant", get_first_followup_prompt()),
+            TimedMessage("user", starting_prompt, timestamp=now),
+            TimedMessage("assistant", get_first_followup_prompt(), timestamp=now),
         ]
 
     for message in messages[1:]:
@@ -201,10 +278,10 @@ def main():
 
     client = genai_client()
     
-    if prompt := st.chat_input("Type your message here (in your own words, no AI please)"):
+    if prompt := st.chat_input("Type your message here (in your own words, no AI please). Use Shift-Enter to add a new line."):
         with st.chat_message("user"):
             st.markdown(prompt)
-        messages.append(TimedMessage("user", prompt))
+        messages.append(TimedMessage("user", prompt, timestamp=now))
 
 
         with st.chat_message("assistant"):
@@ -223,7 +300,7 @@ def main():
                 # There's some situations where the response is not a string
                 # Hack: convert the response to a string
                 response = str(response)
-            messages.append(TimedMessage("assistant", response))
+            messages.append(TimedMessage("assistant", response, timestamp=now))
             st.session_state.messages = messages
 
     with st.expander("Ready to wrap up?", expanded=False):
@@ -255,5 +332,8 @@ def main():
             mime="text/plain"
         )
 
+feedback_page = st.Page(notebook_feedback, title="Notebook Feedback")
+viewer_page = st.Page(conversation_viewer, title="Conversation Viewer")
 
-main()
+pg = st.navigation([feedback_page, viewer_page])
+pg.run()
