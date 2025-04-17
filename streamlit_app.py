@@ -251,14 +251,6 @@ def do_rubric_check(rubric, starting_prompt):
 
 Check the notebook against the rubric."""
 
-    old_prompt =  """Respond in JSON format (with no other text).
-
-Use this JSON schema:
-
-RubricItem = {'item': str, 'status': {"enum": ["pass", "not yet", "not applicable"]}, 'comment': str}
-Result: [RubricItem]
-"""
-
     client = genai_client()
     response = client.models.generate_content(
         model=GENAI_MODEL,
