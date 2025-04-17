@@ -2,6 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import datetime
 import difflib
+import json
 from typing import List, Literal, TypeAlias, Dict, Any
 import streamlit as st
 import nbformat
@@ -11,6 +12,7 @@ from google.genai import types as genai_types
 import subprocess
 import tomli_w
 import toml
+from pydantic import BaseModel
 
 #st.set_page_config(layout="wide")
 
@@ -55,6 +57,12 @@ def genai_client():
         api_key=st.secrets["GEMINI_API_KEY"],
     )
 
+
+class RubricResponse(BaseModel):
+    """A response to a rubric check."""
+    item: str
+    status: Literal["pass", "not yet", "not applicable"]
+    comment: str
 
 DATA_DIR = Path("data")
 if not DATA_DIR.exists():
@@ -233,6 +241,63 @@ def conversation_viewer():
         st.warning("No conversation messages found in the file.")
 
 
+def do_rubric_check(rubric, starting_prompt):
+    prompt = f"""
+{starting_prompt}
+
+<document title="Rubric">
+{rubric}
+</document>
+
+Check the notebook against the rubric."""
+
+    old_prompt =  """Respond in JSON format (with no other text).
+
+Use this JSON schema:
+
+RubricItem = {'item': str, 'status': {"enum": ["pass", "not yet", "not applicable"]}, 'comment': str}
+Result: [RubricItem]
+"""
+
+    client = genai_client()
+    response = client.models.generate_content(
+        model=GENAI_MODEL,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=list[RubricResponse]
+        )
+    )
+
+    # try to parse
+    try:
+        list_of_rubric_responses = json.loads(response.text)
+        if not isinstance(list_of_rubric_responses, list):
+            raise ValueError("Response is not a list")
+        rubric_responses = [RubricResponse.model_validate(item) for item in list_of_rubric_responses]
+    except json.JSONDecodeError as e:
+        st.error(f"Error parsing rubric response: {e}")
+    except Exception as e:
+        st.error(f"Error parsing rubric response: {e}")
+        st.write("Raw response:")
+        st.code(response.text)
+        return
+
+    status_to_emoji = {
+        "pass": "✅",
+        "not yet": "❌",
+        "not applicable": "⏳"
+    }
+    md = ''
+    for rubric_item in rubric_responses:
+        emoji = status_to_emoji.get(rubric_item.status, "❓")
+        md += f"- {emoji} **{rubric_item.item}**\n"
+        if rubric_item.comment:
+            md += f"  - {rubric_item.comment}\n"
+    st.markdown(md)
+        
+
+
 def notebook_feedback():
     st.title("Notebook Feedback Assistant")
 
@@ -240,6 +305,8 @@ def notebook_feedback():
     if uploaded_notebook is None:
         st.stop()
 
+    client = genai_client()
+    
     # Read the uploaded notebook
     notebook = nbformat.read(uploaded_notebook, as_version=4)
     notebook_quarto = notebook_to_quarto(notebook)
@@ -269,6 +336,11 @@ def notebook_feedback():
 </document>
 """
             
+    if st.checkbox("Rubric-check mode?", value=False):
+        rubric = st.text_area("Rubric", height=200)
+        if st.button("Check against rubric"):
+            do_rubric_check(rubric, starting_prompt)
+            
     with st.expander("Show prompt (debug only)", expanded=False):
         st.write("system prompt:")
         st.code(system_prompt(), language="markdown")
@@ -294,8 +366,6 @@ def notebook_feedback():
         with st.chat_message(message.role):
             st.markdown(message.content)
 
-    client = genai_client()
-    
     if prompt := st.chat_input("Type your message here (in your own words, no AI please). Use Shift-Enter to add a new line."):
         with st.chat_message("user"):
             st.markdown(prompt)
