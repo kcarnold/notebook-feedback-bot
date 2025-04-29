@@ -4,6 +4,7 @@ import datetime
 import difflib
 import json
 from typing import List, Literal, TypeAlias, Dict, Any
+from starter_notebooks import get_all_starters, get_all_starter_versions, notebook_to_quarto, update_repo
 import streamlit as st
 import nbformat
 from pathlib import Path
@@ -84,14 +85,8 @@ OBJECTIVES_FILE = REPO_DIR / "course_objectives.yaml"
 
 @st.cache_resource
 def all_starters():
-    """Read all starter notebooks, in Quarto format."""
-    get_updated_repo()
-    all_starters = {}
-    for starter in STARTERS_DIR.glob("*.ipynb"):
-        with open(starter, 'r') as f:
-            nb = nbformat.read(f, as_version=4)
-            all_starters[starter.stem] = notebook_to_quarto(nb)
-    return all_starters
+    """Read all starter notebooks from the external repo in Quarto format."""
+    return get_all_starters(REPO_DIR)
 
 
 @st.cache_resource
@@ -122,16 +117,6 @@ def get_course_objectives():
     with open(OBJECTIVES_FILE, 'r') as f:
         return yaml.safe_load(f)
 
-def notebook_to_quarto(nb):
-    """Convert notebook to Quarto markdown format."""
-    chunks = []
-    for cell in nb.cells:
-        if cell.cell_type == 'markdown':
-            chunks.append(cell.source)
-        elif cell.cell_type == 'code':
-            chunks.append(f"```{{python}}\n{cell.source}\n```")
-    return '\n\n'.join(chunks)
-
 
 def unified_diff(notebook: str, starter: str, n_context_lines: int = 3) -> str:
     return ''.join(
@@ -145,40 +130,10 @@ def unified_diff(notebook: str, starter: str, n_context_lines: int = 3) -> str:
     )
 
 
-def get_file_history(path: Path) -> List[str]:
-    """Return list of commit SHAs that touched this file."""
-    rel = str(path.relative_to(REPO_DIR))
-    out = subprocess.run(
-        ["git", "-C", str(REPO_DIR), "log", "--pretty=format:%H", "--", rel],
-        check=True, stdout=subprocess.PIPE, text=True
-    )
-    return out.stdout.strip().splitlines()
-
-
-def get_file_content_at_rev(path: Path, rev: str) -> nbformat.NotebookNode:
-    """Read the notebook file at a specific revision."""
-    rel = str(path.relative_to(REPO_DIR))
-    out = subprocess.run(
-        ["git", "-C", str(REPO_DIR), "show", f"{rev}:{rel}"],
-        check=True, stdout=subprocess.PIPE, text=True
-    )
-    return nbformat.reads(out.stdout, as_version=4)
-
-
 @st.cache_resource
 def all_starter_versions() -> Dict[str, Dict[str, str]]:
-    """
-    For each starter notebook (by stem), map every commit SHA to its quarto text.
-    """
-    get_updated_repo()
-    versions: Dict[str, Dict[str, str]] = {}
-    for ipynb in STARTERS_DIR.glob("*.ipynb"):
-        name = ipynb.stem
-        versions[name] = {}
-        for rev in get_file_history(ipynb):
-            nb = get_file_content_at_rev(ipynb, rev)
-            versions[name][rev] = notebook_to_quarto(nb)
-    return versions
+    """Map each starter notebook to its historical Quarto versions."""
+    return get_all_starter_versions(REPO_DIR)
 
 
 @st.cache_resource
