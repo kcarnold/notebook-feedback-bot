@@ -48,6 +48,8 @@ class Diff:
     dst_name: str
     diff: str
     n_changed_lines: int
+    ratio: float
+    revision: str
 
 
 @st.cache_resource
@@ -143,29 +145,70 @@ def unified_diff(notebook: str, starter: str, n_context_lines: int = 3) -> str:
     )
 
 
-@st.cache_resource
-def get_starter_and_diff(notebook_quarto, n_context_lines: int) -> Diff:
-    # Find a starter notebook that most closely matches the uploaded notebook
-    starter_notebooks = all_starters()
-    diffs = [
-        (len(unified_diff(notebook_quarto, starter_quarto, n_context_lines=2).split('\n')), starter)
-        for starter, starter_quarto in starter_notebooks.items()
-    ]
-
-    # Sort by size of the diff
-    diffs.sort()
-    num_diff_lines, closest_starter = diffs[0]
-
-    # Redo the diff with the desired number of context lines.
-    starter_quarto = starter_notebooks[closest_starter]
-    new_diff = unified_diff(notebook_quarto, starter_quarto, n_context_lines=n_context_lines)
-
-    return Diff(
-        src_name=closest_starter,
-        dst_name="your_notebook.ipynb",
-        diff=new_diff,
-        n_changed_lines=num_diff_lines,
+def get_file_history(path: Path) -> List[str]:
+    """Return list of commit SHAs that touched this file."""
+    rel = str(path.relative_to(REPO_DIR))
+    out = subprocess.run(
+        ["git", "-C", str(REPO_DIR), "log", "--pretty=format:%H", "--", rel],
+        check=True, stdout=subprocess.PIPE, text=True
     )
+    return out.stdout.strip().splitlines()
+
+
+def get_file_content_at_rev(path: Path, rev: str) -> nbformat.NotebookNode:
+    """Read the notebook file at a specific revision."""
+    rel = str(path.relative_to(REPO_DIR))
+    out = subprocess.run(
+        ["git", "-C", str(REPO_DIR), "show", f"{rev}:{rel}"],
+        check=True, stdout=subprocess.PIPE, text=True
+    )
+    return nbformat.reads(out.stdout, as_version=4)
+
+
+@st.cache_resource
+def all_starter_versions() -> Dict[str, Dict[str, str]]:
+    """
+    For each starter notebook (by stem), map every commit SHA to its quarto text.
+    """
+    get_updated_repo()
+    versions: Dict[str, Dict[str, str]] = {}
+    for ipynb in STARTERS_DIR.glob("*.ipynb"):
+        name = ipynb.stem
+        versions[name] = {}
+        for rev in get_file_history(ipynb):
+            nb = get_file_content_at_rev(ipynb, rev)
+            versions[name][rev] = notebook_to_quarto(nb)
+    return versions
+
+
+@st.cache_resource
+def get_starter_and_diff(notebook_quarto: str, n_context_lines: int) -> Diff:
+    """
+    Find the (starter, revision) whose version has maximal similarity to `notebook_quarto`.
+    """
+    versions = all_starter_versions()
+    best: Diff | None = None
+    best_ratio = -1.0
+    for name, rev_map in versions.items():
+        for rev, starter_quarto in rev_map.items():
+            # compute similarity ratio
+            ratio = difflib.SequenceMatcher(None, notebook_quarto, starter_quarto).ratio()
+            if ratio <= best_ratio:
+                continue
+            # only compute the diff for the new best match
+            diff_text = unified_diff(notebook_quarto, starter_quarto, n_context_lines)
+            nlines = len(diff_text.splitlines())
+            best_ratio = ratio
+            best = Diff(
+                src_name=name,
+                dst_name="your_notebook.ipynb",
+                diff=diff_text,
+                n_changed_lines=nlines,
+                ratio=ratio,
+                revision=rev
+            )
+    assert best is not None, "No starter notebooks found"
+    return best
 
 
 def parse_conversation_file(file_content) -> Dict[str, Any]:
@@ -263,6 +306,8 @@ Check the notebook against the rubric."""
 
     # try to parse
     try:
+        if not isinstance(response.text, str):
+            raise ValueError("Response is not a string")
         list_of_rubric_responses = json.loads(response.text)
         if not isinstance(list_of_rubric_responses, list):
             raise ValueError("Response is not a list")
@@ -305,11 +350,10 @@ def notebook_feedback():
     num_lines = len(notebook_quarto.split('\n'))
 
     diff = get_starter_and_diff(notebook_quarto, n_context_lines=9999)
-    #st.write(f"Debug: {diff.n_changed_lines} lines changed out of {num_lines} lines in the notebook.")
-    is_likely_based_on_starter = diff.n_changed_lines < num_lines * .75
+    is_likely_based_on_starter = diff.ratio > 0.5
     is_lab = st.checkbox("Is this a lab notebook? (i.e., based on a starter notebook)?", value=is_likely_based_on_starter)
     if is_lab:
-        st.write(f"It looks like this notebook was based on {diff.src_name}. If this is not correct, please uncheck the box above.")
+        st.write(f"It looks like this notebook was based on `{diff.src_name}` at `{diff.revision[:6]}`. If this is not correct, please uncheck the box above.")
 
     with st.expander("Show your notebook", expanded=False):
         if is_lab:
